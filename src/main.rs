@@ -1,5 +1,4 @@
 use std::cell::Cell;
-use std::collections::VecDeque;
 use std::env;
 use std::sync::Arc;
 
@@ -11,7 +10,6 @@ use serenity::{
         CommandResult, StandardFramework,
         macros::{command, group},
     },
-    http::Http,
     model::channel::Message,
     model::id::GuildId,
 };
@@ -27,6 +25,9 @@ use songbird::{
 use tokio::sync::Mutex;
 use unicode_prettytable::TableBuilder;
 use url::Url;
+
+mod queue;
+use queue::Queue;
 
 #[group]
 #[commands(play, join, queue)]
@@ -51,7 +52,7 @@ async fn main() {
         .event_handler(Handler)
         .framework(framework)
         .register_songbird()
-        .type_map_insert::<QueueKey>(Arc::new(queue))
+        .type_map_insert::<queue::QueueKey>(Arc::new(queue))
         .await
         .expect("Error creating client");
 
@@ -103,7 +104,7 @@ async fn join(ctx: &Context, msg: &Message) -> CommandResult {
 #[command]
 async fn queue(ctx: &Context, msg: &Message) -> CommandResult {
     let data = ctx.data.read().await;
-    let q_arc = data.get::<QueueKey>().unwrap();
+    let q_arc = data.get::<queue::QueueKey>().unwrap();
     let q = q_arc.queue.lock().await;
     if q.len() == 0 {
         msg.channel_id.say(&ctx.http, format!("No songs")).await?;
@@ -177,11 +178,11 @@ async fn play(ctx: &Context, msg: &Message, mut args: Args) -> CommandResult {
     let source2 = Restartable::ytdl(url, true).await?;
 
     let data = ctx.data.read().await;
-    let q_arc = data.get::<QueueKey>().unwrap();
+    let q_arc = data.get::<queue::QueueKey>().unwrap();
     let mut q = q_arc.queue.lock().await;
     let len = q.len();
 
-    let track = Track {
+    let track = queue::Track {
         source: Arc::new(Mutex::new(Cell::new(None))),
         metadata,
         http: ctx.http.clone(),
@@ -210,60 +211,6 @@ async fn play(ctx: &Context, msg: &Message, mut args: Args) -> CommandResult {
             .await?;
     }
     Ok(())
-}
-
-// Queue is added to the storage ctx of serenity to manage the currently playing tracks.
-// songbird has its own trackqueue thing, but I felt like implementing my own, and it's not much
-// code.
-#[derive(Default)]
-pub struct Queue {
-    queue: Mutex<VecDeque<Track>>,
-}
-
-pub struct QueueKey;
-
-impl serenity::prelude::TypeMapKey for QueueKey {
-    type Value = Arc<Queue>;
-}
-
-#[derive(Clone)]
-struct Track {
-    pub source: Arc<Mutex<Cell<Option<Restartable>>>>,
-    pub metadata: Box<songbird::input::Metadata>,
-    pub http: Arc<Http>,
-}
-
-impl Track {
-    fn name(&self) -> String {
-        match &self.metadata.title {
-            None => "<no title>".to_string(),
-            Some(s) => s.to_string(),
-        }
-    }
-
-    fn artist(&self) -> String {
-        match &self.metadata.artist {
-            None => "<no artist>".to_string(),
-            Some(s) => s.to_string(),
-        }
-    }
-
-    fn duration(&self) -> String {
-        let mut s = match &self.metadata.duration {
-            None => return "<no duration>".to_string(),
-            Some(s) => s.as_secs(),
-        };
-        let (mut h, mut m) = (0, 0);
-        while s > 60 * 60 {
-            h += 1;
-            s -= 60 * 60;
-        }
-        while s > 60 {
-            m += 1;
-            s -= 60;
-        }
-        format!("{}h{}m{}s", h, m, s)
-    }
 }
 
 struct SongEndHandler {
