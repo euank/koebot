@@ -178,36 +178,34 @@ async fn play(ctx: &Context, msg: &Message, mut args: Args) -> CommandResult {
     let source2 = Restartable::ytdl(url, true).await?;
 
     let data = ctx.data.read().await;
-    let q_arc = data.get::<queue::QueueKey>().unwrap();
-    let mut q = q_arc.queue.lock().await;
-    let len = q.len();
-
-    let track = queue::Track {
+    let q = data.get::<queue::QueueKey>().unwrap();
+    let mut track = queue::Track {
         source: Arc::new(Mutex::new(Cell::new(None))),
         metadata,
         http: ctx.http.clone(),
     };
     let name = track.name();
-    q.push_back(track);
 
-    if len == 0 {
+    if q.len().await == 0 {
         msg.channel_id
             .say(&ctx.http, format!("Playing song: {}", name))
             .await?;
         let song = handler.play_source(source2.into());
+        q.enqueue(track).await;
 
         song.add_event(
             Event::Track(TrackEvent::End),
             SongEndHandler {
-                q: q_arc.clone(),
+                q: q.clone(),
                 guild_id: guild.id.clone(),
                 manager: manager,
             },
         )?;
     } else {
-        q[len].source = Arc::new(Mutex::new(Cell::new(Some(source2))));
+        track.source = Arc::new(Mutex::new(Cell::new(Some(source2))));
+        q.enqueue(track).await;
         msg.channel_id
-            .say(&ctx.http, format!("Enqueued song; {} to go before it", len))
+            .say(&ctx.http, format!("Enqueued song; {} to go before it", q.len().await - 1))
             .await?;
     }
     Ok(())
@@ -222,14 +220,14 @@ struct SongEndHandler {
 #[async_trait]
 impl VoiceEventHandler for SongEndHandler {
     async fn act(&self, _ctx: &EventContext<'_>) -> Option<Event> {
-        let mut q = self.q.queue.lock().await;
-        let played = q.pop_front().unwrap();
+        let q = self.q.clone();
+        let played = q.dequeue().await.unwrap();
 
         println!("Song finished: {}", played.name());
-        if q.len() == 0 {
+        if q.len().await == 0 {
             println!("Done with songs");
         } else {
-            let next = q[0].clone();
+            let next = q.peek().await.unwrap();
             let source = next.source.lock().await.replace(None);
             let manager = self.manager.clone();
             if source.is_none() {

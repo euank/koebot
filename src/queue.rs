@@ -14,6 +14,25 @@ pub struct Queue {
     pub queue: Mutex<VecDeque<Track>>,
 }
 
+impl Queue {
+    pub async fn enqueue(&self, t: Track) {
+        self.queue.lock().await.push_back(t);
+    }
+    pub async fn dequeue(&self) -> Option<Track> {
+        self.queue.lock().await.pop_front()
+    }
+    pub async fn peek(&self) -> Option<Track> {
+        let v = self.queue.lock().await;
+        match v.len() {
+            0 => None,
+            _ => Some(v[0].clone()),
+        }
+    }
+    pub async fn len(&self) -> usize {
+        self.queue.lock().await.len()
+    }
+}
+
 pub struct QueueKey;
 
 impl serenity::prelude::TypeMapKey for QueueKey {
