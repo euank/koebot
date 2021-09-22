@@ -151,6 +151,32 @@ impl Handler {
         }
 
         Ok(())
+    }
+
+    async fn playing(&self, ctx: &Context, msg: &Message) -> Result<()> {
+        let cq = self.get_call(ctx, &msg).await?;
+        let cq = cq.lock().await;
+
+        match cq.now_playing {
+            None => {
+                bail!("no song is playing");
+            }
+            Some(ref t) => {
+                let info = t.h.get_info().await?;
+                match t.t.metadata.duration {
+                    None => {
+                        bail!("no duration metadata");
+                    }
+                    Some(d) => {
+                        msg.channel_id
+                            .say(&ctx.http, format!("Playing: {}\nLeft: {}", t.t.name(), format_duration(&(d - info.position))))
+                            .await?;
+                    }
+                }
+            },
+        }
+
+        Ok(())
 
     }
 
@@ -328,6 +354,12 @@ impl EventHandler for Handler {
             s if s == "disconnect" => {
                 self.disconnect(&ctx, &msg).await
             }
+            s if s == "playing" => {
+                self.playing(&ctx, &msg).await
+            }
+            s if s == "help" => {
+                Err(format_err!("```Help\n\tplay <url> - Play a url that youtube-dl supports\n\tskip - Skip\n\tqueue - Show the queueueue\n\tdisconnect\n\tplaying - Info about the playing song```"))
+            }
             _ => {
                 Ok(())
             }
@@ -404,19 +436,23 @@ impl Track {
     }
 
     pub fn duration(&self) -> String {
-        let mut s = match &self.metadata.duration {
+        match &self.metadata.duration {
             None => return "<no duration>".to_string(),
-            Some(s) => s.as_secs(),
-        };
-        let (mut h, mut m) = (0, 0);
-        while s > 60 * 60 {
-            h += 1;
-            s -= 60 * 60;
+            Some(s) => format_duration(s),
         }
-        while s > 60 {
-            m += 1;
-            s -= 60;
-        }
-        format!("{}h{}m{}s", h, m, s)
     }
+}
+
+fn format_duration(d: &std::time::Duration) -> String {
+    let mut s = d.as_secs();
+    let (mut h, mut m) = (0, 0);
+    while s > 60 * 60 {
+        h += 1;
+        s -= 60 * 60;
+    }
+    while s > 60 {
+        m += 1;
+        s -= 60;
+    }
+    format!("{}h{}m{}s", h, m, s)
 }
