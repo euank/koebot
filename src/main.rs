@@ -1,11 +1,9 @@
-use std::cell::Cell;
 use std::collections::hash_map::Entry;
-use std::collections::HashMap;
+use std::collections::{VecDeque, HashMap};
 use std::env;
 use std::sync::Arc;
 
 use anyhow::{bail, format_err, Result};
-use futures::FutureExt;
 use log::{debug, error, info, log_enabled, Level};
 use serenity::{
     async_trait,
@@ -17,14 +15,10 @@ use songbird::{
     input::restartable::Restartable, tracks::TrackHandle, Event, EventContext,
     EventHandler as VoiceEventHandler, SerenityInit, Songbird, TrackEvent,
 };
-use tokio::sync::mpsc::channel;
 use tokio::sync::Mutex;
 use unicode_prettytable::TableBuilder;
 use url::Url;
 use uuid::Uuid;
-
-mod queue;
-use queue::{Queue, Track};
 
 #[derive(Clone)]
 struct Handler {
@@ -34,7 +28,7 @@ struct Handler {
 }
 
 struct CallQueue {
-    q: Queue,
+    q: VecDeque<Track>,
     now_playing: Option<PlayingTrack>,
     call: Arc<Mutex<songbird::Call>>,
     guild_id: GuildId,
@@ -61,7 +55,7 @@ impl Handler {
         let cq = self.get_call(ctx, &msg).await?;
         let mut cq = cq.lock().await;
         let t = Track::from_url(&url).await?;
-        cq.q.queue.push_back(t.clone());
+        cq.q.push_back(t.clone());
 
         if cq.now_playing.is_none() {
             debug!("nothing was playing, starting {:?}", t);
@@ -88,8 +82,8 @@ impl Handler {
                 // otherwise, stop what's playing, play the next
                 h.h.stop()?;
                 cq.now_playing = None;
-                cq.q.queue.pop_back();
-                if let Some(t) = cq.q.queue.back() {
+                cq.q.pop_front();
+                if let Some(t) = cq.q.front() {
                     let playing = self.start_track(&cq, t).await?;
                     cq.now_playing = Some(PlayingTrack {
                         t: t.clone(),
@@ -105,7 +99,7 @@ impl Handler {
         let cq = self.get_call(ctx, &msg).await?;
         let cq = cq.lock().await;
         let metadata =
-            cq.q.queue
+            cq.q
                 .iter()
                 .enumerate()
                 .map(|(i, t)| vec![format!("{}", i), t.name(), t.artist(), t.duration()])
@@ -135,6 +129,7 @@ impl Handler {
         let s = self.clone();
         tokio::task::spawn(Box::pin(async move {
             while let Some(t) = rx.recv().await {
+                debug!("track end event");
                 s.track_end_dyn(t).await;
             }
         }));
@@ -227,8 +222,8 @@ impl Handler {
                             return;
                         }
                         cq.now_playing = None;
-                        cq.q.queue.pop_back();
-                        if let Some(t) = cq.q.queue.back() {
+                        cq.q.pop_front();
+                        if let Some(t) = cq.q.front() {
                             let h = match self.start_track(&cq, &t).await {
                                 Ok(h) => h,
                                 Err(e) => {
@@ -253,6 +248,7 @@ struct SongEventHandler {
 #[async_trait]
 impl VoiceEventHandler for SongEventHandler {
     async fn act(&self, ctx: &EventContext<'_>) -> Option<Event> {
+        debug!("voice event handler: {:?}", ctx);
         match ctx {
             EventContext::Track([ts]) => match ts.0.playing {
                 songbird::tracks::PlayMode::End => {
@@ -317,7 +313,6 @@ impl EventHandler for Handler {
 #[tokio::main]
 async fn main() {
     env_logger::init();
-    let queue = Queue::default();
 
     let songbird = Songbird::serenity();
 
@@ -331,8 +326,7 @@ async fn main() {
     let token = env::var("DISCORD_TOKEN").expect("token");
     let client_builder = Client::builder(token)
         .event_handler(handler)
-        .register_songbird()
-        .type_map_insert::<queue::QueueKey>(Arc::new(queue));
+        .register_songbird();
     let client_builder = songbird::serenity::register_with(client_builder, songbird);
     let mut client = client_builder.await.expect("Error creating client");
 
@@ -342,12 +336,50 @@ async fn main() {
     }
 }
 
-#[async_trait]
-impl VoiceEventHandler for Queue {
-    async fn act(&self, ctx: &EventContext<'_>) -> Option<Event> {
-        if let EventContext::Track(track_list) = ctx {
-            println!("Track ended: {:?}", track_list);
+#[derive(Clone, Debug)]
+pub struct Track {
+    pub metadata: Box<songbird::input::Metadata>,
+    pub url: Url,
+}
+
+impl Track {
+    pub async fn from_url(url: &Url) -> Result<Self> {
+        let source = songbird::ytdl(&url).await?;
+        let metadata = source.metadata;
+        Ok(Track {
+            metadata: metadata,
+            url: url.clone(),
+        })
+    }
+
+    pub fn name(&self) -> String {
+        match &self.metadata.title {
+            None => "<no title>".to_string(),
+            Some(s) => s.to_string(),
         }
-        None
+    }
+
+    pub fn artist(&self) -> String {
+        match &self.metadata.artist {
+            None => "<no artist>".to_string(),
+            Some(s) => s.to_string(),
+        }
+    }
+
+    pub fn duration(&self) -> String {
+        let mut s = match &self.metadata.duration {
+            None => return "<no duration>".to_string(),
+            Some(s) => s.as_secs(),
+        };
+        let (mut h, mut m) = (0, 0);
+        while s > 60 * 60 {
+            h += 1;
+            s -= 60 * 60;
+        }
+        while s > 60 {
+            m += 1;
+            s -= 60;
+        }
+        format!("{}h{}m{}s", h, m, s)
     }
 }
