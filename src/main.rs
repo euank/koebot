@@ -104,6 +104,12 @@ impl Handler {
                 .enumerate()
                 .map(|(i, t)| vec![format!("{}", i), t.name(), t.artist(), t.duration()])
                 .collect::<Vec<_>>();
+        if metadata.len() == 0 {
+            msg.channel_id
+                .say(&ctx.http, format!("No songs playing"))
+                .await?;
+            return Ok(())
+        }
         let table = TableBuilder::default()
             .rows(&metadata)
             .build()
@@ -120,6 +126,7 @@ impl Handler {
         let source = Restartable::ytdl(s, true).await?;
         let mut c = cq.call.lock().await;
         let song = c.play_source(source.into());
+        self.track_calls.lock().await.insert(song.uuid(), cq.channel_id);
 
         let (tx, mut rx) = tokio::sync::mpsc::channel(1);
 
