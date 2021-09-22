@@ -1,5 +1,5 @@
-use std::collections::VecDeque;
 use std::cell::Cell;
+use std::collections::VecDeque;
 use std::sync::Arc;
 
 use anyhow::Result;
@@ -32,7 +32,7 @@ impl Track {
     pub async fn from_url(url: &Url) -> Result<Self> {
         let source = songbird::ytdl(&url).await?;
         let metadata = source.metadata;
-        Ok(Track{
+        Ok(Track {
             metadata: metadata,
             url: url.clone(),
         })
