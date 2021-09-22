@@ -79,8 +79,9 @@ impl Handler {
             }
             Some(ref h) => {
                 debug!("stopping {}", h.t.name());
-                // otherwise, stop what's playing, play the next
+                // otherwise, stop what's playing.
                 h.h.stop()?;
+
                 cq.now_playing = None;
                 cq.q.pop_front();
                 if let Some(t) = cq.q.front() {
@@ -118,6 +119,39 @@ impl Handler {
             .say(&ctx.http, format!("```\n{}\n```", table))
             .await?;
         Ok(())
+    }
+
+    async fn disconnect(&self, ctx: &Context, msg: &Message) -> Result<()> {
+        let guild = msg.guild(&ctx.cache).await.unwrap();
+        let channel_id = guild
+            .voice_states
+            .get(&msg.author.id)
+            .and_then(|voice_state| voice_state.channel_id);
+        let channel_id = match channel_id {
+            Some(channel) => channel,
+            None => {
+                bail!("you are not in a voice channel");
+            }
+        };
+        let mut cl = self.calls.lock().await;
+
+        let c = match cl.remove(&channel_id) {
+            Some(c) => c,
+            None => {
+                bail!("not in your voice channel");
+            },
+        };
+
+        {
+            let cq = c.lock().await;
+            if let Some(ref playing) = cq.now_playing {
+                let _ = playing.h.stop();
+            }
+            cq.call.lock().await.leave().await?;
+        }
+
+        Ok(())
+
     }
 
     async fn start_track(&self, cq: &CallQueue, t: &Track) -> Result<TrackHandle> {
@@ -280,35 +314,31 @@ impl EventHandler for Handler {
         }
         let s = &s[1..];
         debug!("command: {}", s);
-        match s {
+        let res = match s {
             s if s.starts_with("play ") => {
                 debug!("play {}", s[5..].trim());
-                match self.play(&ctx, &msg, s[5..].trim()).await {
-                    Ok(_) => {}
-                    Err(e) => {
-                        println!("err: {:?}", e);
-                    }
-                }
+                self.play(&ctx, &msg, s[5..].trim()).await
             }
             s if s == "skip" => {
-                debug!("skip");
-                match self.skip(&ctx, &msg).await {
-                    Ok(_) => {}
-                    Err(e) => {
-                        println!("err: {:?}", e);
-                    }
-                }
+                self.skip(&ctx, &msg).await
             }
             s if s == "queue" => {
-                debug!("queue");
-                match self.print_queue(&ctx, &msg).await {
-                    Ok(_) => {}
-                    Err(e) => {
-                        println!("err: {:?}", e);
-                    }
-                }
+                self.print_queue(&ctx, &msg).await
             }
-            _ => {}
+            s if s == "disconnect" => {
+                self.disconnect(&ctx, &msg).await
+            }
+            _ => {
+                Ok(())
+            }
+        };
+        match res {
+            Err(e) => {
+                let _ = msg.channel_id
+                    .say(&ctx.http, format!("err: {}", e))
+                    .await;
+            }
+            Ok(_) => {},
         }
     }
 
