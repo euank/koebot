@@ -4,9 +4,14 @@ version = "0.1.0"
 edition = "2018"
 
 [dependencies]
-serenity = "0.10"
+serenity = { version = "0.10", default-features = false, features = ["client", "gateway", "rustls_backend", "model", "cache"] }
 tokio = { version = "1", features = ["full"] }
 url = "2"
 tempfile = "3"
 songbird = "0.2"
 unicode-prettytable = "0.3.1"
+anyhow = "*"
+uuid = "*"
+log = "*"
+env_logger = "*"
+futures = "*"

@@ -2,35 +2,18 @@ use std::collections::VecDeque;
 use std::cell::Cell;
 use std::sync::Arc;
 
+use anyhow::Result;
 use serenity::http::Http;
 use songbird::input::restartable::Restartable;
 use tokio::sync::Mutex;
+use url::Url;
 
 // Queue is added to the storage ctx of serenity to manage the currently playing tracks.
 // songbird has its own trackqueue thing, but I felt like implementing my own, and it's not much
 // code.
 #[derive(Default)]
 pub struct Queue {
-    pub queue: Mutex<VecDeque<Track>>,
-}
-
-impl Queue {
-    pub async fn enqueue(&self, t: Track) {
-        self.queue.lock().await.push_back(t);
-    }
-    pub async fn dequeue(&self) -> Option<Track> {
-        self.queue.lock().await.pop_front()
-    }
-    pub async fn peek(&self) -> Option<Track> {
-        let v = self.queue.lock().await;
-        match v.len() {
-            0 => None,
-            _ => Some(v[0].clone()),
-        }
-    }
-    pub async fn len(&self) -> usize {
-        self.queue.lock().await.len()
-    }
+    pub queue: VecDeque<Track>,
 }
 
 pub struct QueueKey;
@@ -39,14 +22,22 @@ impl serenity::prelude::TypeMapKey for QueueKey {
     type Value = Arc<Queue>;
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Track {
-    pub source: Arc<Mutex<Cell<Option<Restartable>>>>,
     pub metadata: Box<songbird::input::Metadata>,
-    pub http: Arc<Http>,
+    pub url: Url,
 }
 
 impl Track {
+    pub async fn from_url(url: &Url) -> Result<Self> {
+        let source = songbird::ytdl(&url).await?;
+        let metadata = source.metadata;
+        Ok(Track{
+            metadata: metadata,
+            url: url.clone(),
+        })
+    }
+
     pub fn name(&self) -> String {
         match &self.metadata.title {
             None => "<no title>".to_string(),
