@@ -4,7 +4,7 @@ use std::env;
 use std::sync::Arc;
 
 use anyhow::{bail, format_err, Result};
-use log::{debug, error, info, log_enabled, Level};
+use log::debug;
 use serenity::{
     async_trait,
     client::{Client, Context, EventHandler},
@@ -22,8 +22,8 @@ use uuid::Uuid;
 
 #[derive(Clone)]
 struct Handler {
-    calls: Arc<Mutex<HashMap<ChannelId, Arc<Mutex<CallQueue>>>>>,
-    track_calls: Arc<Mutex<HashMap<Uuid, ChannelId>>>,
+    calls: Arc<Mutex<HashMap<GuildId, Arc<Mutex<CallQueue>>>>>,
+    track_calls: Arc<Mutex<HashMap<Uuid, GuildId>>>,
     songbird: Arc<Songbird>,
 }
 
@@ -52,7 +52,7 @@ impl Handler {
             Ok(u) => u,
         };
 
-        let cq = self.get_call(ctx, &msg).await?;
+        let cq = self.get_or_join_call(ctx, &msg).await?;
         let mut cq = cq.lock().await;
         let t = Track::from_url(&url).await?;
         cq.q.push_back(t.clone());
@@ -67,7 +67,7 @@ impl Handler {
     }
 
     async fn skip(&self, ctx: &Context, msg: &Message) -> Result<()> {
-        let q = self.get_call(ctx, msg).await?;
+        let q = self.get_or_join_call(ctx, msg).await?;
         let mut cq = q.lock().await;
 
         match cq.now_playing {
@@ -97,7 +97,12 @@ impl Handler {
     }
 
     async fn print_queue(&self, ctx: &Context, msg: &Message) -> Result<()> {
-        let cq = self.get_call(ctx, &msg).await?;
+        let cq = match self.get_call_by_guild_id(msg.guild(&ctx.cache).await.unwrap().id).await? {
+            None => {
+                bail!("not in any channel");
+            },
+            Some(cq) => cq,
+        };
         let cq = cq.lock().await;
         let metadata =
             cq.q
@@ -106,15 +111,12 @@ impl Handler {
                 .map(|(i, t)| vec![format!("{}", i), t.name(), t.artist(), t.duration()])
                 .collect::<Vec<_>>();
         if metadata.len() == 0 {
-            msg.channel_id
-                .say(&ctx.http, format!("No songs playing"))
-                .await?;
-            return Ok(())
+            bail!("No songs playing");
         }
         let table = TableBuilder::default()
             .rows(&metadata)
             .build()
-            .map_err(|e| format_err!("error: {}", e))?;
+            .map_err(|e| format_err!("{}", e))?;
         msg.channel_id
             .say(&ctx.http, format!("```\n{}\n```", table))
             .await?;
@@ -123,22 +125,11 @@ impl Handler {
 
     async fn disconnect(&self, ctx: &Context, msg: &Message) -> Result<()> {
         let guild = msg.guild(&ctx.cache).await.unwrap();
-        let channel_id = guild
-            .voice_states
-            .get(&msg.author.id)
-            .and_then(|voice_state| voice_state.channel_id);
-        let channel_id = match channel_id {
-            Some(channel) => channel,
-            None => {
-                bail!("you are not in a voice channel");
-            }
-        };
         let mut cl = self.calls.lock().await;
-
-        let c = match cl.remove(&channel_id) {
+        let c = match cl.remove(&guild.id) {
             Some(c) => c,
             None => {
-                bail!("not in your voice channel");
+                bail!("not in any voice channel");
             },
         };
 
@@ -154,7 +145,12 @@ impl Handler {
     }
 
     async fn playing(&self, ctx: &Context, msg: &Message) -> Result<()> {
-        let cq = self.get_call(ctx, &msg).await?;
+        let cq = match self.get_call_by_guild_id(msg.guild(&ctx.cache).await.unwrap().id).await? {
+            None => {
+                bail!("not in any channel");
+            },
+            Some(cq) => cq,
+        };
         let cq = cq.lock().await;
 
         match cq.now_playing {
@@ -186,7 +182,7 @@ impl Handler {
         let source = Restartable::ytdl(s, true).await?;
         let mut c = cq.call.lock().await;
         let song = c.play_source(source.into());
-        self.track_calls.lock().await.insert(song.uuid(), cq.channel_id);
+        self.track_calls.lock().await.insert(song.uuid(), cq.guild_id);
 
         let (tx, mut rx) = tokio::sync::mpsc::channel(1);
 
@@ -210,7 +206,7 @@ impl Handler {
     }
 
     // get_call gets a call, and joins it if we're not in it
-    async fn get_call(&self, ctx: &Context, msg: &Message) -> Result<Arc<Mutex<CallQueue>>> {
+    async fn get_or_join_call(&self, ctx: &Context, msg: &Message) -> Result<Arc<Mutex<CallQueue>>> {
         let guild = msg.guild(&ctx.cache).await.unwrap();
         let channel_id = guild
             .voice_states
@@ -233,8 +229,12 @@ impl Handler {
     ) -> Result<Arc<Mutex<CallQueue>>> {
         let mut cl = self.calls.lock().await;
 
-        let v = match cl.entry(cid) {
+        let v = match cl.entry(gid) {
             Entry::Occupied(c) => {
+                let cq = c.get().clone();
+                if cq.lock().await.channel_id != cid {
+                    return Err(format_err!("already in another channel: {}", cid));
+                }
                 return Ok(c.get().clone());
             }
             Entry::Vacant(v) => v,
@@ -247,12 +247,25 @@ impl Handler {
             q: Default::default(),
             now_playing: None,
             call: h,
-            guild_id: gid,
             channel_id: cid,
+            guild_id: gid,
         }));
         // cache for next time
         v.insert(cq.clone());
         Ok(cq)
+    }
+
+    async fn get_call_by_guild_id(
+        &self,
+        gid: GuildId,
+    ) -> Result<Option<Arc<Mutex<CallQueue>>>> {
+        let mut cl = self.calls.lock().await;
+        match cl.entry(gid) {
+            Entry::Occupied(c) => {
+                Ok(Some(c.get().clone()))
+            }
+            Entry::Vacant(_) => Ok(None)
+        }
     }
 
     async fn track_end(&self, h: &TrackHandle) {
