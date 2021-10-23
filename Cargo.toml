@@ -9,7 +9,7 @@ tokio = { version = "1", features = ["full"] }
 url = "2"
 tempfile = "3"
 songbird = "0.2"
-unicode-prettytable = "0.3.1"
+unicode-prettytable = { git = "https://github.com/euank/unicode-prettytable", rev = "ef7039b4e1e19ab4da1bb7aed86721e974e77ef7" }
 anyhow = "*"
 uuid = "*"
 log = "*"

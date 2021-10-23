@@ -1804,8 +1804,7 @@ dependencies = [
 [[package]]
 name = "unicode-prettytable"
 version = "0.3.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "55677ecc39d7e617c98a55c973859f048361bc21d3a02502258f8e4ca112412c"
+source = "git+https://github.com/euank/unicode-prettytable?rev=ef7039b4e1e19ab4da1bb7aed86721e974e77ef7#ef7039b4e1e19ab4da1bb7aed86721e974e77ef7"
 dependencies = [
  "derive_builder",
  "smart-default",
