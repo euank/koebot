@@ -165,7 +165,7 @@ impl Handler {
                     }
                     Some(d) => {
                         msg.channel_id
-                            .say(&ctx.http, format!("Playing: {}\nLeft: {}", t.t.name(), format_duration(&(d - info.position))))
+                            .say(&ctx.http, format!("Playing: {} - {}\nLeft: {}", t.t.name(), t.t.artist(), format_duration(&(d - info.position))))
                             .await?;
                     }
                 }
