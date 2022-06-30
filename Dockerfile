@@ -1,4 +1,4 @@
-FROM rust:1.55-buster as builder
+FROM rust:1.61-buster as builder
 
 WORKDIR /usr/src/koebot
 COPY . .
