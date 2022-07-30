@@ -11,6 +11,7 @@ use serenity::{
     client::{Client, Context, EventHandler},
     model::channel::Message,
     model::id::{ChannelId, GuildId},
+    model::gateway::GatewayIntents,
 };
 use songbird::{
     input::restartable::Restartable, tracks::TrackHandle, Event, EventContext,
@@ -98,7 +99,7 @@ impl Handler {
 
     async fn print_queue(&self, ctx: &Context, msg: &Message) -> Result<()> {
         let cq = match self
-            .get_call_by_guild_id(msg.guild(&ctx.cache).await.unwrap().id)
+            .get_call_by_guild_id(msg.guild(&ctx.cache).unwrap().id)
             .await?
         {
             None => {
@@ -130,7 +131,7 @@ impl Handler {
     }
 
     async fn disconnect(&self, ctx: &Context, msg: &Message) -> Result<()> {
-        let guild = msg.guild(&ctx.cache).await.unwrap();
+        let guild = msg.guild(&ctx.cache).unwrap();
         let mut cl = self.calls.lock().await;
         let c = match cl.remove(&guild.id) {
             Some(c) => c,
@@ -152,7 +153,7 @@ impl Handler {
 
     async fn playing(&self, ctx: &Context, msg: &Message) -> Result<()> {
         let cq = match self
-            .get_call_by_guild_id(msg.guild(&ctx.cache).await.unwrap().id)
+            .get_call_by_guild_id(msg.guild(&ctx.cache).unwrap().id)
             .await?
         {
             None => {
@@ -230,7 +231,7 @@ impl Handler {
         ctx: &Context,
         msg: &Message,
     ) -> Result<Arc<Mutex<CallQueue>>> {
-        let guild = msg.guild(&ctx.cache).await.unwrap();
+        let guild = msg.guild(&ctx.cache).unwrap();
         let channel_id = guild
             .voice_states
             .get(&msg.author.id)
@@ -418,7 +419,7 @@ async fn main() {
 
     // Login with a bot token from the environment
     let token = env::var("DISCORD_TOKEN").expect("token");
-    let client_builder = Client::builder(token)
+    let client_builder = Client::builder(token, GatewayIntents::non_privileged() | GatewayIntents::MESSAGE_CONTENT)
         .event_handler(handler)
         .register_songbird();
     let client_builder = songbird::serenity::register_with(client_builder, songbird);

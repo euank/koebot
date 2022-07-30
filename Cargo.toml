@@ -4,11 +4,11 @@ version = "0.1.0"
 edition = "2018"
 
 [dependencies]
-serenity = { version = "0.10", default-features = false, features = ["client", "gateway", "rustls_backend", "model", "cache"] }
+serenity = { version = "0.11", default-features = false, features = ["client", "gateway", "rustls_backend", "model", "cache"] }
 tokio = { version = "1", features = ["full"] }
 url = "2"
 tempfile = "3"
-songbird = "0.2"
+songbird = "0.3"
 comfy-table = "4"
 anyhow = "*"
 uuid = "0.8"

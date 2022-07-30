@@ -1,7 +1,10 @@
-FROM rust:1.61-buster as builder
+FROM rust:1.62-buster as builder
 
 WORKDIR /usr/src/koebot
 COPY . .
+
+RUN apt-get update \
+    && apt-get install -y curl ffmpeg python3 cmake
 
 RUN cargo install --path .
 
