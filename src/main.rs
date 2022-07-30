@@ -43,7 +43,7 @@ struct PlayingTrack {
 impl Handler {
     async fn play(&self, ctx: &Context, msg: &Message, url: &str) -> Result<()> {
         // Parse
-        let url = match Url::parse(&url) {
+        let url = match Url::parse(url) {
             Err(_) => {
                 msg.reply(ctx, format!("unable to parse URL {:?}", url))
                     .await?;
@@ -52,7 +52,7 @@ impl Handler {
             Ok(u) => u,
         };
 
-        let cq = self.get_or_join_call(ctx, &msg).await?;
+        let cq = self.get_or_join_call(ctx, msg).await?;
         let mut cq = cq.lock().await;
         let t = Track::from_url(&url).await?;
         cq.q.push_back(t.clone());
@@ -60,7 +60,7 @@ impl Handler {
         if cq.now_playing.is_none() {
             debug!("nothing was playing, starting {:?}", t);
             let playing = self.start_track(&cq, &t).await?;
-            cq.now_playing = Some(PlayingTrack { t: t, h: playing });
+            cq.now_playing = Some(PlayingTrack { t, h: playing });
         }
         // otherwise, we're done, it's queued up
         Ok(())
@@ -110,8 +110,7 @@ impl Handler {
         let metadata =
             cq.q.iter()
                 .enumerate()
-                .map(|(i, t)| vec![format!("{}", i), t.name(), t.artist(), t.duration()])
-                .collect::<Vec<_>>();
+                .map(|(i, t)| vec![format!("{}", i), t.name(), t.artist(), t.duration()]);
         if metadata.len() == 0 {
             bail!("No songs playing");
         }
@@ -313,7 +312,6 @@ impl Handler {
                             "track ended for a channel we don't have a now_playing for {:?}",
                             channel_id
                         );
-                        return;
                     }
                     Some(ref t) => {
                         if t.h.uuid() != u {
@@ -323,7 +321,7 @@ impl Handler {
                         cq.now_playing = None;
                         cq.q.pop_front();
                         if let Some(t) = cq.q.front() {
-                            let h = match self.start_track(&cq, &t).await {
+                            let h = match self.start_track(&cq, t).await {
                                 Ok(h) => h,
                                 Err(e) => {
                                     println!("error playing {:?}", e);
@@ -331,7 +329,7 @@ impl Handler {
                                     return;
                                 }
                             };
-                            cq.now_playing = Some(PlayingTrack { h: h, t: t.clone() });
+                            cq.now_playing = Some(PlayingTrack { h, t: t.clone() });
                         }
                     }
                 }
@@ -396,11 +394,8 @@ impl EventHandler for Handler {
                 Ok(())
             }
         };
-        match res {
-            Err(e) => {
-                let _ = msg.channel_id.say(&ctx.http, format!("err: {}", e)).await;
-            }
-            Ok(_) => {}
+        if let Err(e) = res {
+            let _ = msg.channel_id.say(&ctx.http, format!("err: {}", e)).await;
         }
     }
 
@@ -446,7 +441,7 @@ impl Track {
         let source = songbird::ytdl(&url).await?;
         let metadata = source.metadata;
         Ok(Track {
-            metadata: metadata,
+            metadata,
             url: url.clone(),
         })
     }
@@ -467,7 +462,7 @@ impl Track {
 
     pub fn duration(&self) -> String {
         match &self.metadata.duration {
-            None => return "<no duration>".to_string(),
+            None => "<no duration>".to_string(),
             Some(s) => format_duration(s),
         }
     }
