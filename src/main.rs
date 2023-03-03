@@ -10,8 +10,8 @@ use serenity::{
     async_trait,
     client::{Client, Context, EventHandler},
     model::channel::Message,
-    model::id::{ChannelId, GuildId},
     model::gateway::GatewayIntents,
+    model::id::{ChannelId, GuildId},
 };
 use songbird::{
     input::restartable::Restartable, tracks::TrackHandle, Event, EventContext,
@@ -46,7 +46,7 @@ impl Handler {
         // Parse
         let url = match Url::parse(url) {
             Err(_) => {
-                msg.reply(ctx, format!("unable to parse URL {:?}", url))
+                msg.reply(ctx, format!("unable to parse URL {url:?}"))
                     .await?;
                 return Ok(());
             }
@@ -111,21 +111,21 @@ impl Handler {
         let metadata =
             cq.q.iter()
                 .enumerate()
-                .map(|(i, t)| vec![format!("{}", i), t.name(), t.artist(), t.duration()]);
+                .map(|(i, t)| vec![format!("{i}"), t.name(), t.artist(), t.duration()]);
         if metadata.len() == 0 {
             bail!("No songs playing");
         }
         let mut table = Table::new();
         for (i, meta) in cq.q.iter().enumerate() {
             table.add_row(vec![
-                &format!("{}", i),
+                &format!("{i}"),
                 &meta.name(),
                 &meta.artist(),
                 &meta.duration(),
             ]);
         }
         msg.channel_id
-            .say(&ctx.http, format!("```\n{}\n```", table))
+            .say(&ctx.http, format!("```\n{table}\n```"))
             .await?;
         Ok(())
     }
@@ -291,7 +291,7 @@ impl Handler {
         let u = h.uuid();
         let channel_id = match self.track_calls.lock().await.remove(&u) {
             None => {
-                println!("track ended but we weren't playing it: {:?}", u);
+                println!("track ended but we weren't playing it: {u:?}");
                 return;
             }
             Some(cid) => cid,
@@ -300,19 +300,13 @@ impl Handler {
         let mut hm = self.calls.lock().await;
         match hm.get_mut(&channel_id) {
             None => {
-                println!(
-                    "track ended for a channel we don't have a queue for {:?}",
-                    channel_id
-                );
+                println!("track ended for a channel we don't have a queue for {channel_id:?}");
             }
             Some(cq) => {
                 let mut cq = cq.lock().await;
                 match cq.now_playing {
                     None => {
-                        println!(
-                            "track ended for a channel we don't have a now_playing for {:?}",
-                            channel_id
-                        );
+                        println!("track ended for a channel we don't have a now_playing for {channel_id:?}");
                     }
                     Some(ref t) => {
                         if t.h.uuid() != u {
@@ -325,7 +319,7 @@ impl Handler {
                             let h = match self.start_track(&cq, t).await {
                                 Ok(h) => h,
                                 Err(e) => {
-                                    println!("error playing {:?}", e);
+                                    println!("error playing {e:?}");
                                     // TODO: skip
                                     return;
                                 }
@@ -396,7 +390,7 @@ impl EventHandler for Handler {
             }
         };
         if let Err(e) = res {
-            let _ = msg.channel_id.say(&ctx.http, format!("err: {}", e)).await;
+            let _ = msg.channel_id.say(&ctx.http, format!("err: {e}")).await;
         }
     }
 
@@ -419,15 +413,18 @@ async fn main() {
 
     // Login with a bot token from the environment
     let token = env::var("DISCORD_TOKEN").expect("token");
-    let client_builder = Client::builder(token, GatewayIntents::non_privileged() | GatewayIntents::MESSAGE_CONTENT)
-        .event_handler(handler)
-        .register_songbird();
+    let client_builder = Client::builder(
+        token,
+        GatewayIntents::non_privileged() | GatewayIntents::MESSAGE_CONTENT,
+    )
+    .event_handler(handler)
+    .register_songbird();
     let client_builder = songbird::serenity::register_with(client_builder, songbird);
     let mut client = client_builder.await.expect("Error creating client");
 
     // start listening for events by starting a single shard
     if let Err(why) = client.start().await {
-        println!("An error occurred while running the client: {:?}", why);
+        println!("An error occurred while running the client: {why:?}");
     }
 }
 
@@ -480,5 +477,5 @@ fn format_duration(d: &std::time::Duration) -> String {
         m += 1;
         s -= 60;
     }
-    format!("{}h{}m{}s", h, m, s)
+    format!("{h}h{m}m{s}s")
 }
