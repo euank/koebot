@@ -8,7 +8,7 @@ serenity = { version = "0.11", default-features = false, features = ["client", "
 tokio = { version = "1", features = ["full"] }
 url = "2"
 tempfile = "3"
-songbird = { version = "0.3", features = ["yt-dlp"] }
+songbird = { version = "0.3.2", features = ["yt-dlp"] }
 comfy-table = "4"
 anyhow = "*"
 uuid = "0.8"
