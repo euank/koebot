@@ -370,19 +370,19 @@ impl EventHandler for Handler {
                 debug!("play {}", s[5..].trim());
                 self.play(&ctx, &msg, s[5..].trim()).await
             }
-            s if s == "skip" => {
+            "skip" => {
                 self.skip(&ctx, &msg).await
             }
-            s if s == "queue" => {
+            "queue" => {
                 self.print_queue(&ctx, &msg).await
             }
-            s if s == "disconnect" => {
+            "disconnect" => {
                 self.disconnect(&ctx, &msg).await
             }
-            s if s == "playing" => {
+            "playing" => {
                 self.playing(&ctx, &msg).await
             }
-            s if s == "help" => {
+            "help" => {
                 Err(format_err!("```Help\n\tplay <url> - Play a url that youtube-dl supports\n\tskip - Skip\n\tqueue - Show the queueueue\n\tdisconnect\n\tplaying - Info about the playing song```"))
             }
             _ => {
