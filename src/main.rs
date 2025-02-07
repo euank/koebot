@@ -73,6 +73,10 @@ impl Handler {
 
     async fn track(&self, url: &url::Url) -> Result<Track> {
         let mut source = songbird::input::YoutubeDl::new(self.client.clone(), url.to_string());
+        if let Ok(arg) = std::env::var("YT_DLP_ARGS") {
+            // used for '--cookie /path/to/cookie.txt'
+            source = source.user_args(arg.split(" ").map(str::to_string).collect())
+        }
         let metadata = source.aux_metadata().await?;
         Ok(Track {
             metadata,
