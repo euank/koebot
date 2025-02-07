@@ -5,7 +5,7 @@ edition = "2021"
 
 
 [dependencies]
-serenity = { version = "0.11", default-features = false, features = [
+serenity = { version = "0.12", default-features = false, features = [
     "client",
     "gateway",
     "rustls_backend",
@@ -13,14 +13,15 @@ serenity = { version = "0.11", default-features = false, features = [
     "cache",
 ] }
 
-
+symphonia = { version = "0.5.2", features = ["all-formats"] }
 tokio = { version = "1", features = ["full"] }
 url = "2"
 tempfile = "3"
-songbird = { version = "0.3.2", features = ["yt-dlp"] }
+songbird = { version = "0.4.6" }
 comfy-table = "4"
 anyhow = "*"
-uuid = "0.8"
+uuid = "1.13"
 log = "*"
 env_logger = "*"
 futures = "*"
+reqwest = { version = "0.11", features = ["json"] }

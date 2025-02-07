@@ -13,9 +13,10 @@ use serenity::{
     model::gateway::GatewayIntents,
     model::id::{ChannelId, GuildId},
 };
+use songbird::input::Compose;
 use songbird::{
-    input::restartable::Restartable, tracks::TrackHandle, Event, EventContext,
-    EventHandler as VoiceEventHandler, SerenityInit, Songbird, TrackEvent,
+    tracks::TrackHandle, Event, EventContext, EventHandler as VoiceEventHandler, SerenityInit,
+    Songbird, TrackEvent,
 };
 use tokio::sync::Mutex;
 use url::Url;
@@ -26,6 +27,7 @@ struct Handler {
     calls: Arc<Mutex<HashMap<GuildId, Arc<Mutex<CallQueue>>>>>,
     track_calls: Arc<Mutex<HashMap<Uuid, GuildId>>>,
     songbird: Arc<Songbird>,
+    client: reqwest::Client,
 }
 
 struct CallQueue {
@@ -54,8 +56,9 @@ impl Handler {
         };
 
         let cq = self.get_or_join_call(ctx, msg).await?;
+        let t = self.track(&url).await?;
+
         let mut cq = cq.lock().await;
-        let t = Track::from_url(&url).await?;
         cq.q.push_back(t.clone());
 
         if cq.now_playing.is_none() {
@@ -63,8 +66,18 @@ impl Handler {
             let playing = self.start_track(&cq, &t).await?;
             cq.now_playing = Some(PlayingTrack { t, h: playing });
         }
+        std::mem::drop(cq);
         // otherwise, we're done, it's queued up
         Ok(())
+    }
+
+    async fn track(&self, url: &url::Url) -> Result<Track> {
+        let mut source = songbird::input::YoutubeDl::new(self.client.clone(), url.to_string());
+        let metadata = source.aux_metadata().await?;
+        Ok(Track {
+            metadata,
+            url: url.clone(),
+        })
     }
 
     async fn skip(&self, ctx: &Context, msg: &Message) -> Result<()> {
@@ -76,6 +89,7 @@ impl Handler {
                 msg.channel_id
                     .say(&ctx.http, "Nothing playing to skip")
                     .await?;
+                std::mem::drop(cq);
                 return Ok(());
             }
             Some(ref h) => {
@@ -94,14 +108,13 @@ impl Handler {
                 }
             }
         }
+        std::mem::drop(cq);
         Ok(())
     }
 
     async fn print_queue(&self, ctx: &Context, msg: &Message) -> Result<()> {
-        let cq = match self
-            .get_call_by_guild_id(msg.guild(&ctx.cache).unwrap().id)
-            .await?
-        {
+        let gid = { msg.guild(&ctx.cache).unwrap().id };
+        let cq = match self.get_call_by_guild_id(gid).await? {
             None => {
                 bail!("not in any channel");
             }
@@ -131,9 +144,10 @@ impl Handler {
     }
 
     async fn disconnect(&self, ctx: &Context, msg: &Message) -> Result<()> {
-        let guild = msg.guild(&ctx.cache).unwrap();
         let mut cl = self.calls.lock().await;
-        let c = match cl.remove(&guild.id) {
+        let gid = { msg.guild(&ctx.cache).unwrap().id };
+
+        let c = match cl.remove(&gid) {
             Some(c) => c,
             None => {
                 bail!("not in any voice channel");
@@ -152,10 +166,8 @@ impl Handler {
     }
 
     async fn playing(&self, ctx: &Context, msg: &Message) -> Result<()> {
-        let cq = match self
-            .get_call_by_guild_id(msg.guild(&ctx.cache).unwrap().id)
-            .await?
-        {
+        let gid = { msg.guild(&ctx.cache).unwrap().id };
+        let cq = match self.get_call_by_guild_id(gid).await? {
             None => {
                 bail!("not in any channel");
             }
@@ -195,14 +207,15 @@ impl Handler {
 
     async fn start_track(&self, cq: &CallQueue, t: &Track) -> Result<TrackHandle> {
         println!("starting track {}", t.name());
-        let s: String = t.url.to_string();
-        let source = Restartable::ytdl(s, true).await?;
+        let source = songbird::input::YoutubeDl::new(self.client.clone(), t.url.to_string());
         let mut c = cq.call.lock().await;
-        let song = c.play_source(source.into());
+        let song = c.play_input(source.into());
         self.track_calls
             .lock()
             .await
             .insert(song.uuid(), cq.guild_id);
+        song.make_playable_async().await?;
+        song.play()?;
 
         let (tx, mut rx) = tokio::sync::mpsc::channel(1);
 
@@ -231,11 +244,15 @@ impl Handler {
         ctx: &Context,
         msg: &Message,
     ) -> Result<Arc<Mutex<CallQueue>>> {
-        let guild = msg.guild(&ctx.cache).unwrap();
-        let channel_id = guild
-            .voice_states
-            .get(&msg.author.id)
-            .and_then(|voice_state| voice_state.channel_id);
+        let (gid, channel_id) = {
+            let guild = msg.guild(&ctx.cache).unwrap();
+            let channel_id = guild
+                .voice_states
+                .get(&msg.author.id)
+                .and_then(|voice_state| voice_state.channel_id);
+            (guild.id, channel_id)
+        };
+
         let channel_id = match channel_id {
             Some(channel) => channel,
             None => {
@@ -243,7 +260,7 @@ impl Handler {
             }
         };
 
-        self.get_call_by_channel_id(guild.id, channel_id).await
+        self.get_call_by_channel_id(gid, channel_id).await
     }
 
     async fn get_call_by_channel_id(
@@ -264,8 +281,7 @@ impl Handler {
             Entry::Vacant(v) => v,
         };
 
-        let (h, success) = self.songbird.join(gid, cid).await;
-        success?;
+        let h = self.songbird.join(gid, cid).await?;
         h.lock().await.deafen(true).await?;
         let cq = Arc::new(Mutex::new(CallQueue {
             q: Default::default(),
@@ -282,7 +298,11 @@ impl Handler {
     async fn get_call_by_guild_id(&self, gid: GuildId) -> Result<Option<Arc<Mutex<CallQueue>>>> {
         let mut cl = self.calls.lock().await;
         match cl.entry(gid) {
-            Entry::Occupied(c) => Ok(Some(c.get().clone())),
+            Entry::Occupied(c) => {
+                let ret = c.get().clone();
+                std::mem::drop(cl);
+                Ok(Some(ret))
+            }
             Entry::Vacant(_) => Ok(None),
         }
     }
@@ -298,11 +318,15 @@ impl Handler {
         };
 
         let mut hm = self.calls.lock().await;
-        match hm.get_mut(&channel_id) {
+        let entry = hm.get_mut(&channel_id);
+        match entry {
             None => {
                 println!("track ended for a channel we don't have a queue for {channel_id:?}");
             }
             Some(cq) => {
+                let cq = cq.clone();
+                std::mem::drop(hm);
+
                 let mut cq = cq.lock().await;
                 match cq.now_playing {
                     None => {
@@ -409,6 +433,7 @@ async fn main() {
         songbird: songbird.clone(),
         calls: Arc::new(Mutex::new(HashMap::new())),
         track_calls: Arc::new(Mutex::new(HashMap::new())),
+        client: reqwest::Client::new(),
     };
 
     // Login with a bot token from the environment
@@ -430,20 +455,11 @@ async fn main() {
 
 #[derive(Clone, Debug)]
 pub struct Track {
-    pub metadata: Box<songbird::input::Metadata>,
+    pub metadata: songbird::input::AuxMetadata,
     pub url: Url,
 }
 
 impl Track {
-    pub async fn from_url(url: &Url) -> Result<Self> {
-        let source = songbird::ytdl(&url).await?;
-        let metadata = source.metadata;
-        Ok(Track {
-            metadata,
-            url: url.clone(),
-        })
-    }
-
     pub fn name(&self) -> String {
         match &self.metadata.title {
             None => "<no title>".to_string(),
