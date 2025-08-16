@@ -1,4 +1,4 @@
-FROM rust:1.84.1-bookworm AS builder
+FROM rust:1.87.0-bookworm AS builder
 
 WORKDIR /usr/src/koebot
 COPY . .
