@@ -181,7 +181,16 @@ impl Handler {
 
         match cq.now_playing {
             None => {
-                bail!("no song is playing");
+                if let Some(next_track) = cq.q.front() {
+                    msg.channel_id
+                        .say(
+                            &ctx.http,
+                            format!("Downloading - {}", next_track.name()),
+                        )
+                        .await?;
+                } else {
+                    bail!("no song is playing");
+                }
             }
             Some(ref t) => {
                 let info = t.h.get_info().await?;
