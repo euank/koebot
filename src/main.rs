@@ -33,6 +33,7 @@ struct Handler {
 struct CallQueue {
     q: VecDeque<Track>,
     now_playing: Option<PlayingTrack>,
+    downloading: Option<Track>,
     call: Arc<Mutex<songbird::Call>>,
     guild_id: GuildId,
     channel_id: ChannelId,
@@ -63,7 +64,9 @@ impl Handler {
 
         if cq.now_playing.is_none() {
             debug!("nothing was playing, starting {:?}", t);
+            cq.downloading = Some(t.clone());
             let playing = self.start_track(&cq, &t).await?;
+            cq.downloading = None;
             cq.now_playing = Some(PlayingTrack { t, h: playing });
         }
         std::mem::drop(cq);
@@ -103,8 +106,10 @@ impl Handler {
 
                 cq.now_playing = None;
                 cq.q.pop_front();
-                if let Some(t) = cq.q.front() {
-                    let playing = self.start_track(&cq, t).await?;
+                if let Some(t) = cq.q.front().cloned() {
+                    cq.downloading = Some(t.clone());
+                    let playing = self.start_track(&cq, &t).await?;
+                    cq.downloading = None;
                     cq.now_playing = Some(PlayingTrack {
                         t: t.clone(),
                         h: playing,
@@ -173,7 +178,22 @@ impl Handler {
         let gid = { msg.guild(&ctx.cache).unwrap().id };
         let cq = match self.get_call_by_guild_id(gid).await? {
             None => {
-                bail!("not in any channel");
+                // Check if user is in a voice channel - if so, use get_or_join_call to handle race conditions
+                let user_in_voice_channel = {
+                    let guild = msg.guild(&ctx.cache).unwrap();
+                    guild
+                        .voice_states
+                        .get(&msg.author.id)
+                        .and_then(|voice_state| voice_state.channel_id)
+                        .is_some()
+                };
+
+                if user_in_voice_channel {
+                    // User is in a voice channel, try to get or create the call queue
+                    self.get_or_join_call(ctx, msg).await?
+                } else {
+                    bail!("not in any channel");
+                }
             }
             Some(cq) => cq,
         };
@@ -181,11 +201,11 @@ impl Handler {
 
         match cq.now_playing {
             None => {
-                if let Some(next_track) = cq.q.front() {
+                if let Some(downloading_track) = &cq.downloading {
                     msg.channel_id
                         .say(
                             &ctx.http,
-                            format!("Downloading - {}", next_track.name()),
+                            format!("Downloading - {}", downloading_track.name()),
                         )
                         .await?;
                 } else {
@@ -299,6 +319,7 @@ impl Handler {
         let cq = Arc::new(Mutex::new(CallQueue {
             q: Default::default(),
             now_playing: None,
+            downloading: None,
             call: h,
             channel_id: cid,
             guild_id: gid,
@@ -352,15 +373,18 @@ impl Handler {
                         }
                         cq.now_playing = None;
                         cq.q.pop_front();
-                        if let Some(t) = cq.q.front() {
-                            let h = match self.start_track(&cq, t).await {
+                        if let Some(t) = cq.q.front().cloned() {
+                            cq.downloading = Some(t.clone());
+                            let h = match self.start_track(&cq, &t).await {
                                 Ok(h) => h,
                                 Err(e) => {
                                     println!("error playing {e:?}");
+                                    cq.downloading = None;
                                     // TODO: skip
                                     return;
                                 }
                             };
+                            cq.downloading = None;
                             cq.now_playing = Some(PlayingTrack { h, t: t.clone() });
                         }
                     }
