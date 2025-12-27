@@ -1,10 +1,10 @@
-FROM rust:1.87.0-bookworm AS builder
+FROM rustlang/rust:nightly-bookworm-slim AS builder
 
 WORKDIR /usr/src/koebot
 COPY . .
 
 RUN apt-get update \
-    && apt-get install -y curl ffmpeg python3 cmake libopus-dev
+    && apt-get install -y curl ffmpeg python3 cmake libopus-dev pkg-config libssl-dev
 
 RUN cargo install --path .
 
