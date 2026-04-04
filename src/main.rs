@@ -451,7 +451,7 @@ impl EventHandler for Handler {
             }
         };
         if let Err(e) = res {
-            let _ = msg.channel_id.say(&ctx.http, format!("err: {e}")).await;
+            let _ = msg.channel_id.say(&ctx.http, format!("err: {e:#}")).await;
         }
     }
 
