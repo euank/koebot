@@ -45,6 +45,15 @@ struct PlayingTrack {
 }
 
 impl Handler {
+    fn youtube_dl(&self, url: &Url) -> Result<songbird::input::YoutubeDl<'static>> {
+        let mut source = songbird::input::YoutubeDl::new(self.client.clone(), url.to_string());
+        let args = yt_dlp_args()?;
+        if !args.is_empty() {
+            source = source.user_args(args);
+        }
+        Ok(source)
+    }
+
     async fn play(&self, ctx: &Context, msg: &Message, url: &str) -> Result<()> {
         // Parse
         let url = match Url::parse(url) {
@@ -75,11 +84,7 @@ impl Handler {
     }
 
     async fn track(&self, url: &url::Url) -> Result<Track> {
-        let mut source = songbird::input::YoutubeDl::new(self.client.clone(), url.to_string());
-        if let Ok(arg) = std::env::var("YT_DLP_ARGS") {
-            // used for '--cookie /path/to/cookie.txt'
-            source = source.user_args(arg.split(" ").map(str::to_string).collect())
-        }
+        let mut source = self.youtube_dl(url)?;
         let metadata = source.aux_metadata().await?;
         Ok(Track {
             metadata,
@@ -122,7 +127,7 @@ impl Handler {
     }
 
     async fn print_queue(&self, ctx: &Context, msg: &Message) -> Result<()> {
-        let gid = { msg.guild(&ctx.cache).unwrap().id };
+        let gid = guild_id(msg)?;
         let cq = match self.get_call_by_guild_id(gid).await? {
             None => {
                 bail!("not in any channel");
@@ -152,9 +157,9 @@ impl Handler {
         Ok(())
     }
 
-    async fn disconnect(&self, ctx: &Context, msg: &Message) -> Result<()> {
+    async fn disconnect(&self, msg: &Message) -> Result<()> {
         let mut cl = self.calls.lock().await;
-        let gid = { msg.guild(&ctx.cache).unwrap().id };
+        let gid = guild_id(msg)?;
 
         let c = match cl.remove(&gid) {
             Some(c) => c,
@@ -175,12 +180,14 @@ impl Handler {
     }
 
     async fn playing(&self, ctx: &Context, msg: &Message) -> Result<()> {
-        let gid = { msg.guild(&ctx.cache).unwrap().id };
+        let gid = guild_id(msg)?;
         let cq = match self.get_call_by_guild_id(gid).await? {
             None => {
                 // Check if user is in a voice channel - if so, use get_or_join_call to handle race conditions
                 let user_in_voice_channel = {
-                    let guild = msg.guild(&ctx.cache).unwrap();
+                    let guild = msg
+                        .guild(&ctx.cache)
+                        .ok_or_else(|| format_err!("guild is not available in the cache"))?;
                     guild
                         .voice_states
                         .get(&msg.author.id)
@@ -226,7 +233,7 @@ impl Handler {
                                     "Playing: {} - {}\nLeft: {}",
                                     t.t.name(),
                                     t.t.artist(),
-                                    format_duration(&(d - info.position))
+                                    format_duration(&d.saturating_sub(info.position))
                                 ),
                             )
                             .await?;
@@ -240,7 +247,7 @@ impl Handler {
 
     async fn start_track(&self, cq: &CallQueue, t: &Track) -> Result<TrackHandle> {
         println!("starting track {}", t.name());
-        let source = songbird::input::YoutubeDl::new(self.client.clone(), t.url.to_string());
+        let source = self.youtube_dl(&t.url)?;
         let mut c = cq.call.lock().await;
         let song = c.play_input(source.into());
         self.track_calls
@@ -278,12 +285,15 @@ impl Handler {
         msg: &Message,
     ) -> Result<Arc<Mutex<CallQueue>>> {
         let (gid, channel_id) = {
-            let guild = msg.guild(&ctx.cache).unwrap();
+            let gid = guild_id(msg)?;
+            let guild = msg
+                .guild(&ctx.cache)
+                .ok_or_else(|| format_err!("guild {gid} is not available in the cache"))?;
             let channel_id = guild
                 .voice_states
                 .get(&msg.author.id)
                 .and_then(|voice_state| voice_state.channel_id);
-            (guild.id, channel_id)
+            (gid, channel_id)
         };
 
         let channel_id = match channel_id {
@@ -438,7 +448,7 @@ impl EventHandler for Handler {
                 self.print_queue(&ctx, &msg).await
             }
             "disconnect" => {
-                self.disconnect(&ctx, &msg).await
+                self.disconnect(&msg).await
             }
             "playing" => {
                 self.playing(&ctx, &msg).await
@@ -520,15 +530,54 @@ impl Track {
 }
 
 fn format_duration(d: &std::time::Duration) -> String {
-    let mut s = d.as_secs();
-    let (mut h, mut m) = (0, 0);
-    while s > 60 * 60 {
-        h += 1;
-        s -= 60 * 60;
-    }
-    while s > 60 {
-        m += 1;
-        s -= 60;
-    }
+    let total_seconds = d.as_secs();
+    let h = total_seconds / (60 * 60);
+    let m = (total_seconds % (60 * 60)) / 60;
+    let s = total_seconds % 60;
     format!("{h}h{m}m{s}s")
+}
+
+fn guild_id(msg: &Message) -> Result<GuildId> {
+    msg.guild_id
+        .ok_or_else(|| format_err!("this command can only be used in a guild"))
+}
+
+fn yt_dlp_args() -> Result<Vec<String>> {
+    match env::var("YT_DLP_ARGS") {
+        Ok(args) => parse_yt_dlp_args(&args),
+        Err(env::VarError::NotPresent) => Ok(Vec::new()),
+        Err(e) => Err(format_err!("unable to read YT_DLP_ARGS: {e}")),
+    }
+}
+
+fn parse_yt_dlp_args(args: &str) -> Result<Vec<String>> {
+    shell_words::split(args).map_err(|e| format_err!("unable to parse YT_DLP_ARGS: {e}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{format_duration, parse_yt_dlp_args};
+    use std::time::Duration;
+
+    #[test]
+    fn formats_duration_boundaries() {
+        assert_eq!(format_duration(&Duration::from_secs(0)), "0h0m0s");
+        assert_eq!(format_duration(&Duration::from_secs(59)), "0h0m59s");
+        assert_eq!(format_duration(&Duration::from_secs(60)), "0h1m0s");
+        assert_eq!(format_duration(&Duration::from_secs(3_600)), "1h0m0s");
+        assert_eq!(format_duration(&Duration::from_secs(3_661)), "1h1m1s");
+    }
+
+    #[test]
+    fn parses_quoted_yt_dlp_args() {
+        assert_eq!(
+            parse_yt_dlp_args("--cookies '/path/with spaces/cookies.txt' --no-playlist").unwrap(),
+            [
+                "--cookies",
+                "/path/with spaces/cookies.txt",
+                "--no-playlist"
+            ]
+        );
+        assert!(parse_yt_dlp_args("--cookies 'unterminated").is_err());
+    }
 }
