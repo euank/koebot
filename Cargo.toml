@@ -16,9 +16,7 @@ serenity = { version = "0.12.5", default-features = false, features = [
 symphonia = { version = "0.5.5", features = ["all-formats"] }
 tokio = { version = "1.51", features = ["full"] }
 url = "2.5"
-tempfile = "3.27"
-# Using `next` branch for DAVE (E2EE voice) support (PR #291). Switch back to crates.io once songbird 0.6+ is released.
-songbird = { git = "https://github.com/serenity-rs/songbird.git", branch = "next" }
+songbird = "0.6"
 comfy-table = "7.2"
 anyhow = "1.0"
 uuid = "1.23"
@@ -26,3 +24,4 @@ log = "0.4"
 env_logger = "0.11"
 futures = "0.3"
 reqwest = { version = "0.12", features = ["json"] }
+shell-words = "1.1"
